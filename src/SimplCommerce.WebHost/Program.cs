@@ -215,18 +215,22 @@ public class RequestResponseLoggingMiddleware
 {
     private readonly RequestDelegate _next;
     private readonly HttpClient _httpClient;
-    private const string ApiKey = "sOME_API_KEY";
-    private const string ExternalServerUrl = "https://eo5baqp3ugpiwna.m.pipedream.net";
+    private const string ApiKey = "cc-e23d00ac-d60bd829d922cd9f4c068b218a431339";
+    private const string ProjectID = "a63069c8-ffc0-4d87-a30f-f27b4b212d71";
+    private const string ExternalServerUrl = "http://localhost/api/trafficconsumer.TrafficService/IngestTrafficLog";
+
+    private const string RFC3339Fmt = "yyyy-MM-ddTHH:mm:ss.fffK";
 
     public RequestResponseLoggingMiddleware(RequestDelegate next)
     {
         _next = next;
         _httpClient = new HttpClient();
+        _httpClient.DefaultRequestHeaders.Add("Api-Key", ApiKey);
     }
 
     public async Task InvokeAsync(HttpContext context)
     {
-        var staticExtensions = new HashSet<string> { ".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico" };
+        var staticExtensions = new HashSet<string> { ".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".woff2" };
         if (staticExtensions.Any(ext => context.Request.Path.Value.EndsWith(ext, StringComparison.OrdinalIgnoreCase)))
         {
             // It's a static file request, so just continue to the next middleware
@@ -236,7 +240,10 @@ public class RequestResponseLoggingMiddleware
         {
             var requestData = new Dictionary<string, object>();
             var originalBodyStream = context.Response.Body;
-
+            // Capture the request timestamp
+            var requestTimestamp = DateTimeOffset.UtcNow;
+            requestData["request_time"] = requestTimestamp.ToString(RFC3339Fmt);
+            requestData["project_id"] = ProjectID;
             using (var responseBody = new MemoryStream())
             {
                 context.Response.Body = responseBody;
@@ -253,8 +260,12 @@ public class RequestResponseLoggingMiddleware
 
                     await responseBody.CopyToAsync(originalBodyStream);
                     // collect response data
-                    requestData["ResponseBody"] = responseBodyText;
-                    requestData["ResponseStatusCode"] = context.Response.StatusCode;
+                    // Capture the response timestamp
+                    var responseTimestamp = DateTimeOffset.UtcNow;
+                    requestData["response_time"] = responseTimestamp.ToString(RFC3339Fmt);
+
+                    requestData["raw_response"] = responseBodyText;
+                    requestData["status_code"] = context.Response.StatusCode;
                 }
                 catch (Exception ex)
                 {
@@ -262,7 +273,7 @@ public class RequestResponseLoggingMiddleware
                     {
                         context.Response.StatusCode = 500;
                     }
-                    requestData["ResponseStatusCode"] = context.Response.StatusCode;
+                    requestData["status_code"] = context.Response.StatusCode;
                     HandleException(context, ex, requestData);
                     throw;
                 }
@@ -274,6 +285,21 @@ public class RequestResponseLoggingMiddleware
                 }
             }
         }
+    }
+
+    private string GetRawHeaders(IHeaderDictionary headers)
+    {
+        var stringBuilder = new StringBuilder();
+
+        foreach (var header in headers)
+        {
+            foreach (var value in header.Value)
+            {
+                stringBuilder.AppendLine($"{header.Key}: {value}");
+            }
+        }
+
+        return stringBuilder.ToString();
     }
 
     private async Task CollectRequestData(HttpContext context, Dictionary<string, object> data)
@@ -297,27 +323,35 @@ public class RequestResponseLoggingMiddleware
         }
 
 
-        data["Method"] = request.Method;
-        data["Path"] = request.Path;
-        data["QueryString"] = request.QueryString.ToString();
-        data["Headers"] = request.Headers.ToDictionary(h => h.Key, h => h.Value.ToString());
-        data["RequestBody"] = body;
+        data["method"] = request.Method;
+        data["path"] = GetRequestPath(request);
+        data["query_string"] = request.QueryString.ToString();
+        data["request_headers"] = GetRawHeaders(request.Headers);
+        data["raw_request"] = body;
+    }
 
+    private string GetRequestPath(HttpRequest request)
+    {
+        return request.Path.HasValue ? request.Path.ToString() : string.Empty;
     }
 
     private void HandleException(HttpContext context, Exception exception, Dictionary<string, object> data)
     {
-        data["ExceptionMessage"] = exception.Message;
-        data["StackTrace"] = exception.StackTrace;
+        data["exception_message"] = exception.Message;
+        data["traceback"] = exception.StackTrace;
     }
 
     private async Task SendDataToExternalServer(Dictionary<string, object> data)
     {
         try
         {
-            var content = new StringContent(JsonSerializer.Serialize(data), Encoding.UTF8, "application/json");
-            _httpClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", ApiKey);
+            var wrapper = new Dictionary<string, object>();
+            wrapper["log"] = data;
+            var content = new StringContent(JsonSerializer.Serialize(wrapper), Encoding.UTF8, "application/json");
             var response = await _httpClient.PostAsync(ExternalServerUrl, content);
+            Console.WriteLine("-----");
+            Console.WriteLine(JsonSerializer.Serialize(wrapper));
+            Console.WriteLine("-----");
 
             // Check the response
             if (!response.IsSuccessStatusCode)
