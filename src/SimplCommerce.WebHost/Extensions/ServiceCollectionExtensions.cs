@@ -220,7 +220,7 @@ namespace SimplCommerce.WebHost.Extensions
         {
             services.AddDbContextPool<SimplDbContext>(options => 
             {
-                options.UseSqlServer(configuration.GetConnectionString("DefaultConnection"), b => b.MigrationsAssembly("SimplCommerce.WebHost"));
+                options.UseNpgsql(configuration.GetConnectionString("DefaultConnection"), b => b.MigrationsAssembly("SimplCommerce.WebHost"));
                 options.EnableSensitiveDataLogging();
             });
             return services;

@@ -52,7 +52,7 @@ namespace SimplCommerce.Module.WishList.Areas.WishList.Controllers
 
             return View(model);
         }
-        
+
         [HttpPost]
         public async Task<IActionResult> Share(ShareWishListForm model)
         {

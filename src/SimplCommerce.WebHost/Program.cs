@@ -21,23 +21,54 @@ using SimplCommerce.Module.Core.Extensions;
 using SimplCommerce.Module.Localization.Extensions;
 using SimplCommerce.Module.Localization.TagHelpers;
 using SimplCommerce.WebHost.Extensions;
+using OpenTelemetry;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
+using System.Diagnostics;
+
+var serviceName = "SimplCommerce.CesarsFork";
+var serviceVersion = "1.0.0";
 
 var builder = WebApplication.CreateBuilder(args);
+AppContext.SetSwitch("Npgsql.EnableLegacyTimestampBehavior", true);
+
+#if DEBUG
+Console.WriteLine("Build Configuration: Debug");
+#else
+Console.WriteLine("Build Configuration: Release");
+#endif
+
+
 ConfigureService();
 var app = builder.Build();
 Configure();
 app.Run();
 
-void ConfigureService() 
+
+void ConfigureService()
 {
     var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
     builder.Configuration.AddEntityFrameworkConfig(options =>
     {
-        options.UseSqlServer(connectionString);
+        options.UseNpgsql(connectionString);
     });
 
     GlobalConfiguration.WebRootPath = builder.Environment.WebRootPath;
     GlobalConfiguration.ContentRootPath = builder.Environment.ContentRootPath;
+
+
+    builder.Services.AddOpenTelemetry()
+      .WithTracing(b =>
+      {
+          b
+          .AddSource(serviceName)
+          .ConfigureResource(resource =>
+              resource.AddService(
+                  serviceName: serviceName,
+                  serviceVersion: serviceVersion))
+          .AddAspNetCoreInstrumentation()
+          .AddConsoleExporter();
+      });
 
     builder.Services.AddModules();
     builder.Services.AddCustomizedDataStore(builder.Configuration);
@@ -82,10 +113,10 @@ void ConfigureService()
 }
 
 void Configure()
-    { 
+{
     if (app.Environment.IsDevelopment())
     {
-        app.UseDeveloperExceptionPage();
+        // app.UseDeveloperExceptionPage();
         app.UseMigrationsEndPoint();
     }
     else
@@ -96,6 +127,12 @@ void Configure()
         );
         app.UseHsts();
     }
+    app.UseMiddleware<CodeComet.CaptureMiddleware>(
+        "cc-e23d00ac-d60bd829d922cd9f4c068b218a431339",  // api key
+        "a63069c8-ffc0-4d87-a30f-f27b4b212d71",   // project ID
+        false,  // send all traffic, defaults to false.
+        "http://localhost/api/trafficconsumer.TrafficService/IngestTrafficLog" // defaults to the prod URL
+    );
 
     app.UseWhen(
         context => !context.Request.Path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase),
@@ -130,3 +167,47 @@ void Configure()
         moduleInitializer.Configure(app, builder.Environment);
     }
 }
+
+
+public static class Telemetry
+{
+    //...
+
+    // Name it after the service name for your app.
+    // It can come from a config file, constants file, etc.
+    public static readonly ActivitySource MyActivitySource = new("SimplCommerce.CesarsFork");
+
+    //...
+}
+
+
+// public class ErrorLoggingMiddleware
+// {
+//     private readonly RequestDelegate _next;
+
+//     public ErrorLoggingMiddleware(RequestDelegate next)
+//     {
+//         _next = next;
+//     }
+
+//     public async Task Invoke(HttpContext context)
+//     {
+//         try
+//         {
+//             await _next(context);
+//         }
+//         catch (Exception ex)
+//         {
+//             var currentSpan = OpenTelemetry.Trace.Tracer.CurrentSpan;
+//             if (currentSpan.IsRecording)
+//             {
+//                 currentSpan.RecordException(ex);
+//                 currentSpan.SetStatus(Status.Error.WithDescription(ex.Message));
+//             }
+
+//             // Rethrow the exception to maintain the normal flow of exception handling.
+//             throw;
+//         }
+//     }
+// }
+
